@@ -595,6 +595,42 @@ async function checkConnectivity(
   }
 }
 
+async function checkJsonConnectivity(
+  url: string,
+  timeoutMs: number,
+): Promise<{ ok: boolean; status?: number; value?: unknown; error?: string }> {
+  const fetchFn = resolveFetch();
+  if (!fetchFn) {
+    return { ok: false, error: 'fetch is not available (requires Node.js >=18 or node-fetch)' };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  if (typeof timeout.unref === 'function') {
+    timeout.unref();
+  }
+
+  try {
+    const res = await fetchFn(url, { method: 'GET', signal: controller.signal });
+    let value: unknown;
+    try {
+      value = await res.json();
+    } catch {
+      value = undefined;
+    }
+    return { ok: res.ok, status: res.status, value };
+  } catch (e: unknown) {
+    const errMessage = e instanceof Error ? e.message : String(e);
+    const errName = e instanceof Error ? e.name : '';
+    if (errName === 'AbortError' || errMessage.toLowerCase().includes('abort')) {
+      return { ok: false, error: `Timeout after ${timeoutMs}ms` };
+    }
+    return { ok: false, error: errMessage };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // ============================================================================
 // Summary Computation
 // ============================================================================
@@ -1014,6 +1050,26 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
           },
         });
         if (!ping.ok) nextSteps.push('Click "Connect" in the extension, then re-run doctor');
+
+        const mcpHealthUrl = new URL('/health/mcp', url);
+        const mcpHealth = await checkJsonConnectivity(mcpHealthUrl.toString(), 1500);
+        const healthValue =
+          mcpHealth.value && typeof mcpHealth.value === 'object'
+            ? (mcpHealth.value as Record<string, unknown>)
+            : undefined;
+        const activeSessions = healthValue?.activeSessions;
+        checks.push({
+          id: 'connectivity.mcpHealth',
+          title: 'MCP health',
+          status: mcpHealth.ok ? 'ok' : 'warn',
+          message: mcpHealth.ok
+            ? `GET ${mcpHealthUrl} -> ${mcpHealth.status}`
+            : `GET ${mcpHealthUrl} failed (${mcpHealth.error || 'unknown error'})`,
+          details: {
+            activeSessions: typeof activeSessions === 'number' ? activeSessions : undefined,
+            hint: 'This endpoint verifies the bridge can report MCP session state, not just HTTP liveness.',
+          },
+        });
       } catch (e) {
         checks.push({
           id: 'port.config',

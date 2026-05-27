@@ -101,4 +101,38 @@ describe('服务器测试', () => {
     expect(secondSessionId).toBeTruthy();
     expect(secondSessionId).not.toBe(firstSessionId);
   });
+
+  test('GET /mcp 缺少 session 时应返回 JSON-RPC 错误', async () => {
+    const response = await supertest(Server.getInstance().server)
+      .get('/mcp')
+      .expect(400)
+      .expect('Content-Type', /json/);
+
+    expect(response.body).toEqual({
+      jsonrpc: '2.0',
+      id: null,
+      error: {
+        code: -32001,
+        message: 'Invalid or missing MCP session ID for SSE.',
+        data: {},
+      },
+    });
+  });
+
+  test('DELETE /mcp 缺少 session 时应返回 JSON-RPC 错误', async () => {
+    const response = await supertest(Server.getInstance().server)
+      .delete('/mcp')
+      .expect(400)
+      .expect('Content-Type', /json/);
+
+    expect(response.body).toEqual({
+      jsonrpc: '2.0',
+      id: null,
+      error: {
+        code: -32001,
+        message: 'Invalid or missing MCP session ID.',
+        data: {},
+      },
+    });
+  });
 });

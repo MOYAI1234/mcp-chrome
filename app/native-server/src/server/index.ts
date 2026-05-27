@@ -39,6 +39,12 @@ interface ExtensionRequestPayload {
   data?: unknown;
 }
 
+const MCP_ERROR_CODES = {
+  INVALID_REQUEST: -32600,
+  SESSION_NOT_FOUND: -32001,
+  INTERNAL_ERROR: -32603,
+} as const;
+
 // ============================================================
 // Server Class
 // ============================================================
@@ -140,6 +146,24 @@ export class Server {
         // closed the protocol while handling DELETE or socket close.
       }
     }
+  }
+
+  private sendMcpError(
+    reply: FastifyReply,
+    statusCode: number,
+    code: number,
+    message: string,
+    data?: Record<string, unknown>,
+  ): void {
+    reply.code(statusCode).send({
+      jsonrpc: '2.0',
+      id: null,
+      error: {
+        code,
+        message,
+        ...(data ? { data } : {}),
+      },
+    });
   }
 
   // ============================================================
@@ -271,7 +295,13 @@ export class Server {
           throw error;
         }
       } else {
-        reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_MCP_REQUEST });
+        this.sendMcpError(
+          reply,
+          HTTP_STATUS.BAD_REQUEST,
+          MCP_ERROR_CODES.INVALID_REQUEST,
+          ERROR_MESSAGES.INVALID_MCP_REQUEST,
+          { hasSessionId: Boolean(sessionId) },
+        );
         return;
       }
 
@@ -279,9 +309,13 @@ export class Server {
         await transport.handleRequest(request.raw, reply.raw, request.body);
       } catch (error) {
         if (!reply.sent) {
-          reply
-            .code(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.MCP_REQUEST_PROCESSING_ERROR });
+          this.sendMcpError(
+            reply,
+            HTTP_STATUS.INTERNAL_SERVER_ERROR,
+            MCP_ERROR_CODES.INTERNAL_ERROR,
+            ERROR_MESSAGES.MCP_REQUEST_PROCESSING_ERROR,
+            { sessionId: transport.sessionId },
+          );
         }
       }
     });
@@ -294,7 +328,13 @@ export class Server {
         : undefined;
 
       if (!transport) {
-        reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_SSE_SESSION });
+        this.sendMcpError(
+          reply,
+          HTTP_STATUS.BAD_REQUEST,
+          MCP_ERROR_CODES.SESSION_NOT_FOUND,
+          ERROR_MESSAGES.INVALID_SSE_SESSION,
+          { sessionId },
+        );
         return;
       }
 
@@ -327,7 +367,13 @@ export class Server {
         : undefined;
 
       if (!transport) {
-        reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_SESSION_ID });
+        this.sendMcpError(
+          reply,
+          HTTP_STATUS.BAD_REQUEST,
+          MCP_ERROR_CODES.SESSION_NOT_FOUND,
+          ERROR_MESSAGES.INVALID_SESSION_ID,
+          { sessionId },
+        );
         return;
       }
 
@@ -338,9 +384,13 @@ export class Server {
         }
       } catch (error) {
         if (!reply.sent) {
-          reply
-            .code(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.MCP_SESSION_DELETION_ERROR });
+          this.sendMcpError(
+            reply,
+            HTTP_STATUS.INTERNAL_SERVER_ERROR,
+            MCP_ERROR_CODES.INTERNAL_ERROR,
+            ERROR_MESSAGES.MCP_SESSION_DELETION_ERROR,
+            { sessionId },
+          );
         }
       } finally {
         await this.cleanupMcpSession(sessionId as string);

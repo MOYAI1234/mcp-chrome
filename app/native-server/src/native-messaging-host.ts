@@ -2,7 +2,7 @@ import { stdin, stdout } from 'process';
 import { Server } from './server';
 import { v4 as uuidv4 } from 'uuid';
 import { NativeMessageType } from 'chrome-mcp-shared';
-import { TIMEOUTS } from './constant';
+import { SERVER_CONFIG, TIMEOUTS } from './constant';
 import fileHandler from './file-handler';
 
 interface PendingRequest {
@@ -232,6 +232,19 @@ export class NativeMessagingHost {
         return;
       }
 
+      const existingBridge = await this.checkExistingBridge(port);
+      if (existingBridge.healthy) {
+        this.sendMessage({
+          type: NativeMessageType.SERVER_STARTED,
+          payload: {
+            port,
+            reusedExistingBridge: true,
+            activeSessions: existingBridge.activeSessions,
+          },
+        });
+        return;
+      }
+
       await this.associatedServer.start(port, this);
 
       this.sendMessage({
@@ -240,6 +253,33 @@ export class NativeMessagingHost {
       });
     } catch (error: any) {
       this.sendError(`Failed to start server: ${error.message}`);
+    }
+  }
+
+  private async checkExistingBridge(port: number): Promise<{
+    healthy: boolean;
+    activeSessions?: number;
+  }> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1000);
+
+    try {
+      const response = await fetch(`http://${SERVER_CONFIG.HOST}:${port}/health/mcp`, {
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        return { healthy: false };
+      }
+
+      const body = (await response.json()) as { status?: string; activeSessions?: number };
+      return {
+        healthy: body.status === 'ok',
+        activeSessions: typeof body.activeSessions === 'number' ? body.activeSessions : undefined,
+      };
+    } catch {
+      return { healthy: false };
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
