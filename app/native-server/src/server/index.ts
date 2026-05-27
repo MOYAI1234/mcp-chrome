@@ -22,7 +22,8 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { getMcpServer } from '../mcp/mcp-server';
+import type { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/index.js';
+import { createMcpServer } from '../mcp/mcp-server';
 import { AgentStreamManager } from '../agent/stream-manager';
 import { AgentChatService } from '../agent/chat-service';
 import { CodexEngine } from '../agent/engines/codex';
@@ -48,6 +49,7 @@ export class Server {
   private nativeHost: NativeMessagingHost | null = null;
   private transportsMap: Map<string, StreamableHTTPServerTransport | SSEServerTransport> =
     new Map();
+  private mcpServersMap: Map<string, McpProtocolServer> = new Map();
   private agentStreamManager: AgentStreamManager;
   private agentChatService: AgentChatService;
 
@@ -115,6 +117,29 @@ export class Server {
         message: 'pong',
       });
     });
+
+    this.fastify.get('/health/mcp', async (_request: FastifyRequest, reply: FastifyReply) => {
+      reply.status(HTTP_STATUS.OK).send({
+        status: 'ok',
+        activeSessions: this.transportsMap.size,
+        sessions: Array.from(this.transportsMap.keys()),
+      });
+    });
+  }
+
+  private async cleanupMcpSession(sessionId: string): Promise<void> {
+    this.transportsMap.delete(sessionId);
+    const server = this.mcpServersMap.get(sessionId);
+    this.mcpServersMap.delete(sessionId);
+
+    if (server) {
+      try {
+        await Promise.resolve(server.close());
+      } catch {
+        // Session cleanup should be best-effort. The transport may have already
+        // closed the protocol while handling DELETE or socket close.
+      }
+    }
   }
 
   // ============================================================
@@ -175,13 +200,14 @@ export class Server {
         });
 
         const transport = new SSEServerTransport('/messages', reply.raw);
+        const server = createMcpServer();
         this.transportsMap.set(transport.sessionId, transport);
+        this.mcpServersMap.set(transport.sessionId, server);
 
         reply.raw.on('close', () => {
-          this.transportsMap.delete(transport.sessionId);
+          void this.cleanupMcpSession(transport.sessionId);
         });
 
-        const server = getMcpServer();
         await server.connect(transport);
 
         reply.raw.write(':\n\n');
@@ -221,21 +247,29 @@ export class Server {
         // Transport found, proceed
       } else if (!sessionId && isInitializeRequest(request.body)) {
         const newSessionId = randomUUID();
+        const server = createMcpServer();
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => newSessionId,
           onsessioninitialized: (initializedSessionId) => {
             if (transport && initializedSessionId === newSessionId) {
               this.transportsMap.set(initializedSessionId, transport);
+              this.mcpServersMap.set(initializedSessionId, server);
             }
           },
         });
 
         transport.onclose = () => {
-          if (transport?.sessionId && this.transportsMap.get(transport.sessionId)) {
-            this.transportsMap.delete(transport.sessionId);
+          const closedSessionId = transport?.sessionId || newSessionId;
+          if (this.transportsMap.get(closedSessionId) || this.mcpServersMap.get(closedSessionId)) {
+            void this.cleanupMcpSession(closedSessionId);
           }
         };
-        await getMcpServer().connect(transport);
+        try {
+          await server.connect(transport);
+        } catch (error) {
+          await Promise.resolve(server.close()).catch(() => undefined);
+          throw error;
+        }
       } else {
         reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_MCP_REQUEST });
         return;
@@ -308,6 +342,8 @@ export class Server {
             .code(HTTP_STATUS.INTERNAL_SERVER_ERROR)
             .send({ error: ERROR_MESSAGES.MCP_SESSION_DELETION_ERROR });
         }
+      } finally {
+        await this.cleanupMcpSession(sessionId as string);
       }
     });
   }
@@ -347,6 +383,8 @@ export class Server {
     }
 
     try {
+      const sessionIds = Array.from(this.transportsMap.keys());
+      await Promise.all(sessionIds.map((sessionId) => this.cleanupMcpSession(sessionId)));
       await this.fastify.close();
       closeDb();
       this.isRunning = false;
