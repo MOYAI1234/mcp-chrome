@@ -9,7 +9,26 @@ Both Codex CLI and Claude Code can connect to this endpoint to use Chrome browse
 
 ## Codex CLI Configuration
 
-### Option 1: HTTP MCP Server (Recommended)
+### Option 1: Stdio Proxy (Recommended for Codex Desktop)
+
+Codex Desktop can connect more reliably through the stdio proxy that ships with
+the bridge. The proxy owns the MCP client session and forwards calls to the
+local HTTP endpoint at `http://127.0.0.1:12306/mcp`.
+
+Example `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.chrome-mcp-server]
+enabled = true
+command = "node"
+args = ["D:\\claudecode\\mcp-chrome\\app\\native-server\\dist\\mcp\\mcp-server-stdio.js"]
+startup_timeout_sec = 30
+```
+
+This keeps the user-facing tool namespace stable while avoiding stale direct
+HTTP transports after the local bridge is restarted.
+
+### Option 2: HTTP MCP Server
 
 Add the following to your `~/.codex/config.json`:
 
@@ -23,7 +42,7 @@ Add the following to your `~/.codex/config.json`:
 }
 ```
 
-### Option 2: Via Environment Variable
+### Option 3: Via Environment Variable
 
 Set the MCP URL via environment variable before running codex:
 
