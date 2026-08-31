@@ -6,6 +6,18 @@ MOYAI daily operations must automate real Chrome workflows, especially ThinkingD
 
 This plan focuses on making `mcp-chrome-bridge` reliable enough for host AI driven browser automation.
 
+## Current Status 2026-05-28
+
+- MOYAI fork has implemented P1 through P3:
+  - per-session MCP server instances for `/mcp` and `/sse`
+  - `/health/mcp` active session visibility
+  - bridge startup reuse when an existing healthy bridge owns the port
+  - MCP-compatible JSON-RPC error bodies for missing or invalid sessions
+  - server regression tests for repeated initialize, cleanup, and invalid-session paths
+- Upstream `hangwin/mcp-chrome` already has open PR #346, `fix(native-server): use per-session MCP Server factory (closes #345)`, which covers the same core singleton MCP server problem as MOYAI P1.
+- If contributing back upstream, avoid duplicating PR #346. A cleaner follow-up is to upstream the remaining bridge health, duplicate-start reuse, `doctor` MCP health check, and JSON-RPC error improvements after #346 lands or on top of that branch.
+- Keep `docs/MOYAI_CHROME_MCP_BUGFIX_PLAN.md` fork-local; it contains MOYAI-specific production validation context and should not be included in an upstream PR.
+
 ## Observed Failures
 
 - `GET /ping` on the local bridge succeeds, so the HTTP server can start.
@@ -164,4 +176,3 @@ Acceptance:
 - Closing a transport should remove its session entry.
 - `/health/mcp` should report no active sessions after cleanup.
 - Starting bridge while a healthy bridge owns the port should fail cleanly with the owner PID.
-
